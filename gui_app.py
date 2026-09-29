@@ -551,11 +551,19 @@ def extract_rebar_design_results(sap_model):
             if 'rebar %' in c_low or 'rebar percent' in c_low or 'pmm ratio or rebar' in c_low or 'ratio' in c_low:
                 rebar_col = c
                 break
-                
+
+        combo_col = None
+        for c in df_results.columns:
+            c_low = c.lower()
+            if 'combo' in c_low:
+                combo_col = c
+                break
+
         if frame_col and rebar_col:
             for _, row in df_results.iterrows():
                 frame_name = str(row[frame_col]).strip()
                 rebar_str = str(row[rebar_col]).strip()
+                combo_name = str(row[combo_col]).strip() if combo_col else ""
                 rebar_val = 0.0
                 try:
                     val_str = rebar_str.replace('%', '').strip()
@@ -564,7 +572,9 @@ def extract_rebar_design_results(sap_model):
                         rebar_val *= 100.0
                 except ValueError:
                     rebar_val = 0.0
-                rebar_data[frame_name] = max(rebar_val, rebar_data.get(frame_name, 0.0))
+                existing = rebar_data.get(frame_name)
+                if existing is None or rebar_val > existing['pct']:
+                    rebar_data[frame_name] = {'pct': rebar_val, 'combo': combo_name}
     return rebar_data
 
 
@@ -712,13 +722,13 @@ def generate_pdf_report(x_grids, y_grids, aggregated_grids, file_path, scale_fac
     
     headers = [
         Paragraph("Grid Point", table_header_style),
-        Paragraph("X Coord (m)", table_header_style),
-        Paragraph("Y Coord (m)", table_header_style),
+        Paragraph("X, Y (m)", table_header_style),
         Paragraph("Drawn Section", table_header_style),
         Paragraph("Shape", table_header_style),
         Paragraph("Dimensions (mm)", table_header_style),
         Paragraph("Angle (°)", table_header_style),
         Paragraph("Max Rebar %", table_header_style),
+        Paragraph("PMM Combo", table_header_style),
         Paragraph("Governing Story", table_header_style),
         Paragraph("Frame Element", table_header_style)
     ]
@@ -737,22 +747,23 @@ def generate_pdf_report(x_grids, y_grids, aggregated_grids, file_path, scale_fac
             rebar_p = Paragraph(f"<font color='#EF4444'><b>{rebar:.2f}%</b></font>", table_body_bold_style)
             
         dim_str = f"{col['width']*1000:.0f} x {col['depth']*1000:.0f}" if col['shape'] != "Circular" else f"Dia {col['width']*1000:.0f}"
-        
+        pmm_combo = col.get('max_rebar_combo', '') or "N/A"
+
         row_data = [
             Paragraph(col['grid_label'], table_body_bold_style),
-            Paragraph(f"{col['x']:.3f}", table_body_style),
-            Paragraph(f"{col['y']:.3f}", table_body_style),
+            Paragraph(f"{col['x']:.1f}, {col['y']:.1f}", table_body_style),
             Paragraph(col['prop_name'], table_body_style),
             Paragraph(col['shape'], table_body_style),
             Paragraph(dim_str, table_body_style),
             Paragraph(f"{col['angle']:.1f}", table_body_style),
             rebar_p,
+            Paragraph(pmm_combo, table_body_style),
             Paragraph(col['max_rebar_story'], table_body_style),
             Paragraph(col['max_rebar_frame'], table_body_style)
         ]
         table_rows.append(row_data)
-        
-    col_widths = [100, 80, 80, 140, 80, 140, 80, 100, 150, 132]
+
+    col_widths = [100, 140, 130, 70, 130, 70, 90, 120, 130, 102]
     data_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
     
     t_style = [
@@ -1170,8 +1181,10 @@ class EtabsRebarGui(ctk.CTk):
                 except Exception:
                     pass
                     
-                rebar_pct = rebar_data.get(uniq_name, 0.0)
-                
+                rebar_info = rebar_data.get(uniq_name, {})
+                rebar_pct = rebar_info.get('pct', 0.0)
+                pmm_combo = rebar_info.get('combo', '')
+
                 resolved_cols.append({
                     'frame_name': uniq_name,
                     'col_label': col_bay,
@@ -1184,7 +1197,8 @@ class EtabsRebarGui(ctk.CTk):
                     'width': w,
                     'depth': d,
                     'angle': angle,
-                    'rebar_pct': rebar_pct
+                    'rebar_pct': rebar_pct,
+                    'pmm_combo': pmm_combo
                 })
                 
             if not resolved_cols:
@@ -1242,6 +1256,7 @@ class EtabsRebarGui(ctk.CTk):
                     'max_rebar': max_rebar_col['rebar_pct'],
                     'max_rebar_story': max_rebar_col['story_name'],
                     'max_rebar_frame': max_rebar_col['frame_name'],
+                    'max_rebar_combo': max_rebar_col.get('pmm_combo', ''),
                     'shape': largest_col['shape'],
                     'width': largest_col['width'],
                     'depth': largest_col['depth'],
